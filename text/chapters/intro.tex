@@ -1,0 +1,158 @@
+% !TEX root =  ../thesis.tex
+
+Modern compilers contain several complex, highly specified, effective optimizations that aim to transform the input program into an equivalent more efficient one. The efficiency is usually evaluated in terms of gains in execution speed of the optimized application in respect to the non optimized version, but also other measures (e.g. spatial efficiency) can be used. Famous compilers, such as LLVM and GCC, implement more than 60 different optimization algorithms. The importance of deep and capable optimizations in modern computer science is vital, as modern applications become more and more complex, and resources, such as the ones in mobile devices, are often very limited. Furthermore, The implementation of effective optimizations is fostered by the fact that modern architectures stress out parallelism execution of the code. Because of these reasons, improving the optimization processes is a key task in compiling performing and responsive applications.
+
+That being said, if an optimization process is not correct, the output program may have a semantically different behavior from the input program. This of course is a disruptive drawback for every application, especially for applications that operate in critical contexts (military, aerospace, banking, etc.). In these contexts, the correctness of the optimizers is more important than their effectiveness. Hence is very important to use well tested optimizers that we are confident they produce correct code.
+
+Enhancing both the scope and the quality of the optimizations is a difficult task. Basically, an optimization on some source program $A$ is possible if a property or invariant is found such that permits to modify the program in a target program $B$ equivalent to $A$ (i.e. for each possible input, the output produced by $A$ is equal to the output produced by $B$) wherein the execution time of $B$ is lesser than the execution time of $A$, or, more generally, is more efficient. These properties can be fairly trivial or more difficult to be discovered.
+For example the property ``variable $x$ is never used'' allows the elimination of the declaration and the definition of $x$. In compiler theory there exist several optimization passes that build def-use chains to find these kind of properties. The pass subsequently exploits these invariants to eliminate useless code and speed-up the execution of the target program.
+
+Another example shows that some properties can be more difficult to discover automatically. Consider the code in Figure~\ref{fig:mccarty}.
+\begin{figure}[b]
+  \begin{mdframed}
+  \centering
+  \begin{lstlisting}
+    mc91(int n)
+    {
+      if (n > 100) {
+        return n - 10;
+      } else {
+        return mc91(mc91(n+11));
+      }
+    }
+    \end{lstlisting}
+  \end{mdframed}
+  \caption{McCarty's 91 function}
+  \label{fig:mccarty}
+\end{figure}
+
+This famous function has the following property:
+\[\text{mc91}(n) =
+\begin{cases}
+n-10, & \text{if}\:n>100\\
+91, & \text{otherwise}
+\end{cases}\]
+Hence, the function can be transformed in the more efficient version in Figure~\ref{fig:mccartyopt}.
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{lstlisting}
+  mc91opt(int n)
+  {
+    if (n > 100) {
+      return n - 10;
+    } else {
+      return 91;
+    }
+  }
+  \end{lstlisting}
+  \end{mdframed}
+  \caption{McCarty's 91 function}
+  \label{fig:mccartyopt}
+\end{figure}
+
+However, the transformation from \texttt{mc91} to \texttt{mc91opt} requires finding a property that is difficult to obtain from the code of the function. Running LLVM and GCC optimizers don't lead to the removal of the recursion.
+
+This example demonstrated that the scope of the optimizations can still be enhanced by finding additional information and properties about the code. This corresponds to the intuitive principle that if the compiler ``gets to know'' more about the input program, it can obtain better optimized code. In order for the compiler to know more, one can think of two methods:
+\begin{itemize}
+  \item Refine further the compiler analysis
+  \item Convey additional information from external sources
+\end{itemize}
+
+Compiler theory focused on the first solution. Although this approach delivered very good result, it's far from finding all the interesting properties of a program (where ``interesting'' means properties that can lead to an optimization).
+
+Consider the case where some properties are computed by an external static analyzer (e.g. an analyzer combined with an SMT solver) or given by a human (for example, the programmer writing the contract of a function).
+The aim of the thesis is to build a framework that can exploit this additional information so as to broaden the scope of the optimization.
+
+Since the optimization process is composed of different transformation passes, it is necessary that the additional information can be used by any of the transformations, and furthermore that the information is still correct after the previous transformations. This is not a trivial problem, since some optimization passes may modify the structure and the control flow of the source program, thus invalidating the invariants. In order to be propagated throughout a transformation pass, an invariant might be modified to preserve its validity. To solve this problem the thesis describes the concept of \emph{witness generator} to check the validity of the transformation and to carry the invariants from the source to the target program. The generated witness can then be checked independently to prove the correctness of the output; having an independently verifiable proof of the correctness of a transformation can be of great advantage in highly critical contexts and applications.
+
+\section{Problem definition}
+\label{sec:problem_definition}
+
+The thesis aims to solve three different, yet intertwined, problems. More precisely, the problems are in a consequential order, i.e. by solving the first one the second arises, and by solving the second one the third arises:
+\begin{enumerate}[a)]
+  \item How to augment the scope and the quality of the optimization?
+  \item How to propagate assertions from end to end of an optimization pass?
+  \item How to check the correctness of the transformation and the propagation?
+\end{enumerate}
+
+\subsection{How to augment the scope and the quality of the optimization}
+\label{sub:how_to_augment_the_scope}
+As stated before, this work tries to solve this problem by conveying additional information from external sources. Thus the problem can be reformulated in another way: ``how to let the compiler understand additional information to be used to augment the scope and the quality of the optimization?'' If we think, for example, hand-inserted annotations within the code, like JML specification for Java, it could be useful for the optimization, if these assertions are proven correct, to use them as additional information. The annotations are usually written in a first order logic-like language.
+
+\subsection{How to propagate assertions from end to end of an optimization pass}
+\label{sub:how_to_propagate_assertions}
+Let $P_{{source}}$ be a program to be optimized and $P_{target}$ the output program of the optimization pass, which is equivalent to $P_{target}$. Let $I_{{source}}$ be a set of properties of $P_{source}$. The problem is to find a set of properties $I_{target}$ valid in $P_{target}$ that are equivalent in some way to $I_{source}$ for $P_{source}$. A traditional transformation passes can be formulated as a function $T:P \rightarrow P$, where $P$ is the set of all programs, such that $P_{target}=T(P_{source})$. To solve the considered problem, the transformation definition is modified in this way: a transformation $W$ is a function $W:(P \times I) \rightarrow (P \times I)$, where $I$ is the set of all sets of properties about programs, such that $(P_{target},I_{target})=T(P_{source},I_{source})$.
+
+\subsection{How to check the correctness of the transformation and the propagation}
+\label{sub:how_to_check_the_correctness}
+The formulation of problem in Section~\ref{sub:how_to_propagate_assertions} leads to the problem on how to formulate an automatic checker that verify that, given that the properties about the source program are correct:
+\begin{enumerate}[a)]
+  \item The target program is equivalent to the source program
+  \item The soundness and correctness of the properties is preserved in the target program
+\end{enumerate}
+
+For point a) different approaches are described in literature of formal methods and compilers. Naively proving correctness of a transformation over all legal inputs, as conducted in \cite{leroy2006formal}, is obviously infeasible most of the times. An alternative way of certifying each instance is translation validation (\cite{zuck2005translation},\cite{barrett2005tvoc}), which employs heuristics to guess a witness for every instance of a sequence of unknown transformations. The use of heuristics, however, limits its applicability. Besides the drawbacks described above, these two solutions don't offer any method to deal with point b).
+
+Such joint problems don't find a solution in the current approaches, hence the need of a new approach arises.
+
+\section{Proposed solution}
+\label{sec:proposed_solution}
+
+This thesis presents a framework to solve the problems stated above. The architecture is designed around that of a standard optimizing compiler, which consists of a sequence of optimization passes. Every pass takes as input a program, conducts its own analysis of the program (possibly making use of information gathered in earlier passes), and produces a program as output, optimized according to some metric (computation time, space, energy, etc.).
+
+We build upon this basic architecture by augmenting each analysis pass so that it correctly transmits the information obtained initially from annotations to all passes. As each pass may arbitrarily transform its input program, it is necessary to transform the information as well in order to retain its usefulness for subsequent passes (Figure~\ref{fig:arch2}).
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{tikzpicture}
+    \node [] (v01) at (-5,2.5) {$P_{source}$};
+    \node [] (v02) at (-5,-0.5) {$I_{source}$};
+    \node [bordered] (v1) at (-2.5,1) {Pass $W_0$};
+    \node [bordered] (v2) at (0,1) {Pass $W_1$};
+    \node [bordered] (v3) at (2.5,1) {Pass $W_2$};
+
+    \draw [arrow] (v1) -- (v2) node[midway,above] {$P_0,I_0$};
+    \draw [arrow] (v2) -- (v3) node[midway,above] {$P_1,I_1$};
+    \draw [arrow] (v3) -- (6,1) node[near end,above] {$P_{target},I_{target}$};
+    \draw [arrow](v01) -- (-5,1) -- (v1);
+    \draw [arrow](v02) -- (-5,1) -- (v1);
+    \draw [arrow] (-3.5,2.5) rectangle (3.5,-0.5);
+  \end{tikzpicture}
+  \end{mdframed}
+  \caption{Overall architecture}
+  \label{fig:arch2}
+\end{figure}
+
+To obtain this result, the existing optimizations are modified in two ways. First, transformation passes are built to understand the annotations passed externally and use them to optimize the code. The annotation are written in a FOL-like language that the optimizer can use. A \emph{Witness Generator} is built for every optimization; the witness Generator generates a \emph{witness} that can be proved independently to check the validity of the transformation (Figure~\ref{fig:arch1}).
+
+\begin{figure}[b]
+  \begin{mdframed}
+  \centering
+  \begin{tikzpicture}
+    \draw  (-4,2.5) rectangle (1,-1.5);
+    \node [bordered] (v2) at (-1,1.5) {Transformation\\Pass};
+    \node [bordered] (v3) at (-1,-0.5) {Witness\\Generator};
+    \node [bordered] (v1) at (-5,1.5) {$P_{source}$};
+    \node [bordered] (v5) at (2,1.5) {$P_{target}$};
+    \node [bordered] (v4) at (-5,-0.5) {$I_{source}$};
+    \node [bordered] (v6) at (2,-0.5) {$I_{target}$};
+    \draw [arrow] (v1) edge (v2);
+    \draw [arrow] (v2) edge (v3);
+    \draw [arrow] (v4) -- (-5,0.5) -- (-2,0.5) -- (-2,1.15);
+    \draw [arrow] (v1) -- (-3.5,1.5) -- (-3.5,-0.5) -- (v3);
+    \draw [arrow] (v2) edge (v5);
+    \draw [arrow] (v3) edge (v6);
+  \end{tikzpicture}
+  \end{mdframed}
+  \caption{Witness-generating optimization pass}
+  \label{fig:arch1}
+\end{figure}
+
+The approach for generating the witness is to set a \emph{stuttering simulation} relation between source and target programs. Stuttering simulation, as defined in \cite{namjoshi1997simple}, in this context comes more useful than regular strict simulation, as the target program may have fewer instructions than the source. It is shown \cite{zuck2005translation} that establishing a stuttering simulation relation from target to source is a sound and complete method for proving correctness, as opposed to strict simulation.
+
+The framework is built open the Low-Level Virtual Machine compiler(LLVM). The choice is driven by the fact that LLVM represent a state of the art, modern, modular compiler, with a well maintained and documented codebase. LLVM optimization passes work on an intermediate language called \emph{LLVM Intermediate Representation} (IR), as presented in \cite{lattner2004llvm}. The IR is a Static Single Assignment (SSA) based representation that provides type safety, low-level operations, flexibility, and the capability of representing ``all'' high-level languages cleanly. It is the common code representation used throughout all phases of the LLVM compilation strategy.
+
+This work is structured as follows. Chapter~\ref{cha:transformation_witness} introduces the concepts of witness and invariant propagation. They will be analyzed from a formal point of view, and some key properties of the witness are demonstrated. It is described that stuttering simulation is a sound and complete witness relation for generic code transformation, and that the very witness relation can be used to propagate the invariants. In Chapter~\ref{cha:witness_for_common_optimizations} the theoretical concepts shown previously are applied to some common optimizations in order to exemplify the critical points. For every optimization presented, a corresponding witness is described. In Chapter~\ref{cha:hacking_llvm} the LLVM framework design is presented and the key details in the implementations are described. It also describes how the transformations presented in the previous chapter are implemented. Chapter~\ref{cha:conclusions} describes the results obtained by the framework and the goals that will be pursued in the future, as well as provide with a conclusive overview of the work, comparing it to some related researches, and it introduces the limitation of the current framework, and how it can be extended.

@@ -1,0 +1,481 @@
+% !TEX root =  ../thesis.tex
+
+In this chapter we describe the implementation of the theoretic transformations described in Chapter~\ref{cha:transformation_witness}: witness generation, witness checking and invariant propagation. The source code is available as a git repository\footnote{\url{https://bitbucket.org/itajaja/llvm-csfv}}. Basically it is a fork from the original LLVM repository where the additional passes and structures are being added. Description on how to run the program and basic examples are given in Appendix A.
+
+We introduce an overview of the technologies being used, particularly LLVM and Z3. These are open-source projects, the source code is downloadable from their respective websites\footnote{LLVM website: \url{llvm.org}} \footnote{Z3 website: \url{z3.codeplex.com}}.
+
+\section{LLVM}
+\label{sec:llvm}
+
+LLVM (Low-Level virtual machine) is a compiler that provides a modern source- and target-independent optimizer, along with code generation support for many popular CPUs. These libraries are built around a well specified code representation, known as the LLVM intermediate representation ("LLVM IR"). The LLVM Core libraries are well documented, they present a very modular and understandable code and offer various tools to help the programmer in using them.
+
+A fundamental design feature of LLVM is the inclusion of a language-independent type system, namely \emph{LLVM Intermediate Representation} (\emph{IR}). The LLVM representation aims to be light-weight and low-level, while being expressive, typed, and extensible at the same time. It aims to be a ``universal IR'' of sorts, by being at a low enough level that high-level ideas may be cleanly mapped to it. By providing type information, LLVM can be used as the target of optimizations: for example, through pointer analysis, it can be proven that a C automatic variable is never accessed outside of the current function, allowing it to be promoted to a simple SSA value instead of a memory location.
+
+The LLVM IR can be represented in three equivalent forms:
+\begin{itemize}
+  \item As in-memory data structure
+  \item As Human readable Assembly-like text format
+  \item As a bytecode representation for storing space-optimized and fast-retrievable files
+\end{itemize}
+
+LLVM is able to convert consistently and without information loss from one form to another, depending on the result one wants to achieve. LLVM optimizer accepts any of these three forms as input, then, if the input is in assembly or bytecode form, it converts it in the in-memory format to perform the optimizations, and then it can reconvert it in one of the requested three forms. Additionally, it can call the back-end driver to convert the IR into machine code.
+
+LLVM programs are composed of \emph{Modules}, each of which is a translation unit of the input programs. Each module consists of functions, global variables, and symbol table entries. Modules may be combined together with the LLVM linker, which merges function (and global variable) definitions, resolves forward declarations, and merges symbol table entries. Listing~\ref{lst:helloIR} shows the code for the \texttt{HelloWorld} Module.
+
+\begin{lstlisting}[caption={Example of IR code}, label={lst:helloIR}, float = ht]
+; ModuleID = 'hello.c'
+target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v64:64:64-v128:128:128-a0:0:64-s0:64:64-f80:128:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-linux-gnu"
+
+@.str = private unnamed_addr constant [14 x i8] c"Hello World!\0A\00", align 1
+
+define i32 @main(i32 %argc, i8** %argv) nounwind uwtable {
+  %1 = alloca i32, align 4
+  %2 = alloca i32, align 4
+  %3 = alloca i8**, align 8
+  store i32 0, i32* %1
+  store i32 %argc, i32* %2, align 4
+  store i8** %argv, i8*** %3, align 8
+  %4 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([14 x i8]* @.str, i32 0, i32 0))
+  ret i32 0
+}
+
+declare i32 @printf(i8*, ...)
+\end{lstlisting}
+
+In LLVM (as in many other compilers) the optimizer is organized as a pipeline of distinct optimization passes each of which is run on the input and has a chance to transform the code. Common examples of passes are the inliner (which substitutes the body of a function into call sites), expression re-association, loop invariant code motion, etc. Depending on the optimization level, different passes are run: for example at \texttt{-O0} (no optimization) the Clang front-end for C program runs no passes, at \texttt{-O3} it runs a series of 67 passes in its optimizer (as of LLVM 2.8).
+
+Each LLVM pass is written as a C++ class that derives (indirectly) from the Pass class. Most passes are written in a single \texttt{.cpp} file, and their subclass of the Pass class is defined in an anonymous namespace (which makes it completely private to the defining file). An example of pass is given in Listing~\ref{lst:passhello}
+
+\begin{lstlisting}[caption={Example of pass}, label={lst:passhello}, float =hb]
+#include "llvm/Pass.h"
+#include "llvm/Function.h"
+#include "llvm/Support/raw_ostream.h"
+
+using namespace llvm;
+
+namespace {
+  struct Hello : public FunctionPass {
+    static char ID;
+    Hello() : FunctionPass(ID) {}
+
+    virtual bool runOnFunction(Function &F) {
+      errs() << "Hello: ";
+      errs().write_escaped(F.getName()) << '\n';
+      return false;
+    }
+  };
+}
+
+char Hello::ID = 0;
+static RegisterPass<Hello> X("hello", "Hello World Pass", false, false);
+\end{lstlisting}
+
+Every function pass overrides a \texttt{runOnFunction()} method, that will be run on every function, and will perform customs analysis and transformation over the targeted piece of code.
+
+\section{SMT solver}
+\label{sec:smt_solver}
+
+When the witness is generated, its correctness must be proved. The theory of formal methods offers different techniques to prove the correctness of a formula against a program representation. Especially, Satisfiability Theories (\emph{SAT}) and its extension Satisfiability Modulo Theory (\emph{SMT}) allow to determine whether a given First order logic formula is satisfiable or not with an arbitrary assignment of variables. While SAT solvers can handle only boolean variables, SMT solvers can handle different logical theories. SMT solvers are broadly used in formal methods to formally prove the correctness of a program given some FOL constraints (\cite{griggio2009effective}, \cite{Moskal09satisfiabilitymodulo})  and several automated solvers has being proven to proficiently solve difficult SMT problems.
+
+% Nowadays, there are several different SMT solvers, some open-source and some others proprietary, that can treat different sets of logical theories and expose API in different languages. Since SAT problem is NP-complete, an algorithm that can efficiently solve every SAT problem doesn't exist. For this reason, usually the SMT problem set is restricted to a subset that doesn't lose broad applicability and it's easier to solve. Besides that, current products implement complex and efficient heuristics that can solve most of the common problems in a reasonable time.
+
+\subsection{Z3}
+\label{sub:z3}
+\emph{Z3} is a widely employed SMT automated solver developed by Microsoft research, whose code is freely available for academic research. It handles several different theories such as empty-theory (uninterpreted function theory), linear arithmetic, nonlinear arithmetic, bit-vectors, arrays and data types theory. Besides accepting user input at runtime, it exposes interfaces for python, OCaml, Java, .NET languages, C and C++. The C++ APIs are integrated in the ACSL Passes to generate and check the witness, as it will be described later. An example of how the APIs work is given in Listing~\ref{lst:Z3example}.
+
+\begin{lstlisting}[caption={Example of an SMT problem with Z3 API for C++}, label={lst:Z3example}, float =hb]
+void demorgan() {
+  context c;
+
+  expr x = c.bool_const("x");
+  expr y = c.bool_const("y");
+  expr conjecture = !(x && y) == (!x || !y);
+
+  solver s(c);
+  // adding the negation of the conjecture as a constraint.
+  s.add(!conjecture);
+  switch (s.check()) {
+    case unsat:   std::cout << "de-Morgan is valid\n"; break;
+    case sat:     std::cout << "de-Morgan is not valid\n"; break;
+    case unknown: std::cout << "unknown\n"; break;
+  }
+}
+\end{lstlisting}
+
+% There are other well organized and complete projects, such as OpenSMT and CVC4 that could have been selected,
+We selected Z3 for its performance, number and quality of features (mostly in terms of implemented theories), easiness to use. Moreover, its C++ API are concise, understandable, well documented and almost plug-and-play for all main platforms.
+
+\section{Overview of transformation passes}
+\label{sec:overview_of_transformation_passes}
+
+The current version of LLVM implements many analysis and transformation passes\footnote{The complete list is found at \url{http://llvm.org/docs/Passes.html}}, from the basic common to the most highly engineered ones. They are roughly subdivided into analysis, transformation and utility passes. Among the transformation passes, we can count Dead Code Elimination, Constant Propagation, Sparse Conditional Constant Propagation, Instruction Combine, Function Inlining, Loop invariant code motion, Loop unrolling, Loop Strengthen Reduction etc. Different optimizations can run at different layers of the intermediate representation. Depending on its functionality, a pass can run on the overall module, on each function, on each Basic Block, on each loop, or on each instruction. Herein the passes that are taken mostly in consideration are the function passes, which are the most common ones and can perform significant optimizations. The passes are then organized together by a Pass Manager that decides the order of execution of the passes, and whether to re-execute a pass another time after the code has been changed. The decisions are made based on a set of constraints, and they happen transparently from implementing a new optimization. The following passes are chosen by their commonality, ease of study and for clearly highlighting some of the critical parts of the framework.
+
+\section{ACSL Passes}
+\label{sec:acsl_passes}
+
+In this section the design and implementation for the transformations listed in Chapter~\ref{cha:witness_for_common_optimizations} is described. We will refer to these transformations as ``ACSL passes''\footnote{The name refers to the annotation language, even if the transformation can be not directly related to ACSL at all. This name comes from a convention used before writing this work}, to distinguish them from the ordinary optimizations that don't have witness generation. Some care is needed while carrying the theoretical concepts and structures to an actual implementation: the abstraction layer where these objects are to be put doesn't permit the concepts to remain in a mathematical form, therefore there are some critical points that one must take care of when translating from theory to practice.
+
+The state, as defined in chapter~\ref{cha:transformation_witness}, is ``a pair $(l, v),$ where $l$ is a node of $G$ and $v$ is type-consistent assignment of values to each variable in $V$''. Since, during static analysis is not always possible to assign a value to every variable, it won't be possible to deal with states as they are described in the definitions. In particular, because of the presence of uncertainty about variable values, a program state may not necessarily correspond to a unique state in the abstract program. Nevertheless, it suffices that the transition relation (function) refers only the variables that have an assigned values. That is, being $x$ a variable with unassigned value, if the transition relation makes no reference to $x$, then it doesn't matter that $x$ is not assigned a value. Therefore in the context of this work we explicitly choose symbolic representation.
+
+The goal of the witness is to check if the target program \emph{implements} the source, that is to check whether or not the target program is a stuttering simulation of the source.
+% and this, of course, implies talking about states. It follows that the witness checking idea should be revisited when implementing it, paying attention not to lose the properties (completeness, correctness) that the theoretical definition guarantees.
+
+The process that has being followed to build an ACSL Pass is similar for every pass. The starting base is the LLVM source, in particular, the code of the optimization that is going to be implemented is modified to add the witness generator. First, the analysis phase of the pass is augmented to store all the invariants found by the analysis in a way that they will be able to be used by the witness. Every optimization will, of course, perform a different analysis, and every result can be stored among the other invariants. The invariant then is linked to a location in the code. If the invariant is the result of the analysis of a single instruction, mapping the invariant to a location is effortless (the location will be the analyzed instruction itself). If the invariant is the result of an analysis that involves more than a single instruction, a location where the invariant holds has to be found, which depends on the transformation pass. The witness generation phase follows the analysis and the transformation passes. It construct a witness for each analyzed part of code. To this end, is necessary to have the generated invariants, the source program relation and the target program relation. Subsequently, the generated witness can be discharged to the Z3 solver to check it satisfiability.
+
+To carry the invariants from one pass to the next, we need a structure to preserve the information gathered during the analyses as well as the one that is provided externally. The class \texttt{Invariant Manager} exposes static methods to access a data structure where all the invariants are stored. The manager takes care of mapping the invariant to its location, and exposes utilities to iterate over the annotations and to retrieve the invariant at a specified location. It also keeps in memory the global values needed by the Z3 API to perform the requested operations.
+
+A generic work flow of the pass is given in Figure~\ref{fig:workflow}. The gray ellipses represents objects and the teal boxes represent actions or components that takes the objects in input that produces the objects in output. Now we analyze each basic component of the generic ACSL optimization.
+
+\begin{figure}[H]
+  \begin{mdframed}
+    \vspace{1cm}
+    \leading{14pt}
+    \centering
+    \tikzstyle{block} = [rectangle, draw, fill=blue!20, text width=6em, text centered, rounded corners, minimum height=4em]
+    \tikzstyle{line} = [draw, -stealth]
+    \tikzstyle{cloud} = [ellipse, draw,fill=gray, node distance=3cm,
+    minimum height=2em, align=center]
+    \begin{tikzpicture}[node distance = 2cm, auto]
+      % Place nodes
+      \node [block] (wg) {Witness Generator};
+      \node [block, above right = 0cm and 1cm of wg] (oa) {Optimizer Analyzer};
+      \node [cloud, above = 1cm of oa] (extinvs) {External\\Invariants};
+      \node [cloud, left of=extinvs] (source) {Source\\program};
+      \node [cloud, right of=wg] (invs) {Invariants};
+      \node [cloud, right of=invs] (target) {Target\\Program};
+      \node [cloud, below=1cm of wg] (witness) {$W$};
+      \node [block, below=1cm of witness] (wc) {Witness Checker};
+      \node [block, left=1cm of wg] (t1) {Translator};
+      \node [block, below of=target] (t2) {Translator};
+      \node [cloud, below=1cm of t1] (s) {$S$};
+      \node [cloud, left of=t2] (t) {$T$};
+      \node [block, right=3cm of wc] (ip) {Invariant Propagator};
+      \node [cloud, left of=t2] (t) {$T$};
+      \node [cloud, below=.8cm of ip] (pi) {Propagated\\Invariants};
+
+      % Draw edges
+      \path [line,dashed] (source) -- (wg);
+      \path [line,dashed] (source) -- (oa);
+      \path [line,dashed] (extinvs) -- (oa);
+      \path [line,dashed] (oa) -- (invs);
+      \path [line,dashed] (oa) -- (target);
+      \path [line,dashed] (invs) -- (wg);
+      \path [line,dashed] (wg) -- (witness);
+      \path [line,dashed] (witness) -- (wc);
+      \path [line,dashed] (target) -- (t2);
+      \path [line,dashed] (source) -| (t1);
+      \path [line,dashed] (t1) -- (s);
+      \path [line,dashed] (t2) -- (t);
+      \path [line,dashed] (t) -- (wc);
+      \path [line,dashed] (s) -- (wc);
+      \path [line,dashed] (witness) -- (ip);
+      \path [line,dashed] (invs) -- (ip);
+      \path [line,dashed] (ip) -- (pi);
+    \end{tikzpicture}
+    \vspace{1cm}
+  \end{mdframed}
+  \caption{ACSL pass workflow}
+  \label{fig:workflow}
+\end{figure}
+
+The \textbf{Optimizer/Analyzer} is where the transformation occurs. This component is basically the original LLVM transformation, it usually takes the \emph{Source Program} and produces the \emph{Target program}. In the ACSL version it is augmented to also consider a list of \emph{External Invariants} as input and to produce, in addition to the source program, a list of \emph{Invariants} that is made up of the external invariants plus the eventual invariants found during the analysis of the function.
+
+The \textbf{Witness Generator} takes care of generating the transformation-specific Witness Relation \emph{W}. It takes as input the \emph{Invariants} produced by the Analyzer and the \emph{Source Program} and traverses the source to produce the Witness Relation for the given program. The produced output is a mathematical relation \emph{W} in the state space of the program.
+
+The \textbf{Translator} component transforms the LLVM intermediate representation into a \emph{transition system}. As described in chapter~\ref{cha:transformation_witness}, the transition system is composed by a set of states, a subset of initial states and a transition relation in the state space. For convenience, the set of states is encoded as a propositional formula, which is a more convenient form for the SMT solver. The translator takes as input both the source and the target programs and produces two different relations, respectively \emph{S} and \emph{T}.
+
+The \textbf{Witness Checker} is where the Witness Relation is tested against the target and source transition system to see if it is a Stuttering Simulation (in some cases the step simulation is enough, and it is more efficient to check the latter than the former). The Checker relies on the Z3 solver to prove the satisfiability of the formula. If the witness checker proved the transformation not to be correct, it will halt the optimization process and produce an alert message.
+
+If the witness checker proved the transformation to be correct, the \textbf{Invariant Propagator} is called to transform the list of invariants into \emph{Propagated Invariants} that comply with the target program. The Invariants are produced calculating the pre-image of $\theta$ under $W$ ($\langle W \rangle \theta$) as discussed in Chapter~\ref{cha:transformation_witness} . Z3 deals also of computing the propagated invariants. the set will be eventually stored in the Invariant Manager, substituting the former set of invariant.
+
+To summarize, the overall structure is as follows. For every optimization, there are two outputs, source and external invariants, and two inputs, target and propagated invariants. Every transformation pass has its own witness generator. The analysis phase needs to be augmented to use the additional invariant input and produce new enriched invariants. The translator, witness checker and invariant propagator are transformation-independent, hence a single implementation of these component suffices to handle all the possible transformations.
+
+As stated at the beginning of Chapter~\ref{cha:hacking_llvm}, LLVM IR has three different representation. The Invariant and Invariant Manager structures work with the in-memory representation as all the LLVM transformation passes do. Thus, when the IR gets converted, it loses all the annotations' information, as there is yet no conversion functionality for the annotations. Because of this limitation, the ACSL Passes are run at once before any other transformation pass, then the annotations can be dropped and then the standard LLVM optimizations can be run later, as they don't make use of the additional information provided.
+
+The current implementation of the annotation framework deals only with variables of integer types, the transformation and the related examples described below will accordingly show how integer variables are handled. Future extensions of the framework will presumably include other types (floats, chars, arrays etc.) and other transformations specifically built for these types could be implemented. It also only deals with a subset of the LLVM IR, more precisely integer binary operators, phi, compare, conditional and unconditional branch and return instructions.
+
+\emph{A note on the examples}. The examples shown in the next chapters are written in LLVM IR text-format. They are kept as simple as possible, in order to introduce as few syntax constructs as possible. Whereas a basic knowledge of the LLVM IR will foster the comprehension of these examples, they will hopefully remain meaningful even to a less expert eye. Furthermore, they do not aim at explaining any IR characteristic, rather, they attempt to highlight the ongoing transformations. The examples are written to be a faithful translation of the pseudocode shown for the examples in Chapter~\ref{cha:transformation_witness}. The main notable difference between the pseudocode is the fact that, being the IR in SSA form, all the multiple assigned variables are split in several new variables, one for each different assignment. Converting ordinary code into SSA form is primarily a simple matter of replacing the target of each assignment with a new variable, and replacing each use of a variable with the ``version'' of the variable reaching that point. Therefore the code has the same behavior and is subject to the same transformation process. The target version of every example is obtained by simply running the transformation over the source.
+
+\subsection{Variable Renaming}
+\label{sub:variable_renaming}
+
+The first transformation considered is not a real optimization, and its goal is to demonstrate the theoretical concepts developed in the previous chapter in a simple way without getting lost in unnecessary details. Not being an optimization, a corresponding transformation in LLVM does not exist, and the (very simple) code that deals with the transformation has being written from scratch. We will examine the basic mechanisms of the witness generator.
+
+Since this transformation doesn't change the structure of the code, there is no need to check that the witness is a stuttering simulation. It is sufficient to check if it is a consistent step simulation, thus simplifying the verification. The formula to be checked is the following:
+\[
+\begin{array}{l}
+  \forall u \in I_B, \exists s \in I_B, X(u,s) \land \\
+  \forall u,v \in S_B, s \in S_A, (X(u,s) \land R_B(U,V)) \implies (\exists t \in S_A, X(v,t) \land R_A(S,t))
+\end{array}
+\]
+where $s$ and $t$ are source states, $t$ and $v$ are target states, $A_A$ and $A_B$ are the set of source and target states, $I_A$ and $I_B$ the subset of initial states, $R_A$ and $R_B$ the transition relation and $X$ the witness. The set of state is computed symbolically. This is the generic formula that has to be checked for step simulation. Universal quantifiers cannot be easily handled by the SMT solvers, hence they are removed and the satisfiability of the negation of the formula is checked. If it is unsatisfiable the formula is valid, otherwise, the Solver will show an assignment of the values where the negation is satisfied, which can be read in debugging.
+
+In the Variable renaming case, the witness produced is in the form $v=Tv$ for every variable $v$ in the source and $Tv$ in the target, at every program location $l$, that is, $W := (L = \bar{L}) \land \forall v, v = \bar{v}$. There is no analysis in this pass, and external invariants are not used either. The transformation pass simply takes every named instruction and add a prefix to its name, updating also all the uses of the instruction. The witness generator will also iterate over the named instruction and build a witness relation of the form above for any of them.
+
+\subsection{Constant Propagation}
+\label{sub:constant_propagation}
+
+For Constant propagation the LLVM pass iterates over each instruction in a function and checks if it is constant propagatable. The core of the optimization is the LLVM built-in method \texttt{ConstantFoldInstruction()} that provides a powerful abstraction over the IR: it finds if an instruction can be statically computed as constant. If so, the optimization proceeds substituting all the uses of the instruction with the computed constant. An example is given in Figures~\ref{fig:sconstprop} and~\ref{fig:tconstprop} (respectively source and target).
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+define i32 @main(i32 %argc, i8** %argv) nounwind uwtable {
+  %x = add i32 10, 0
+  %y1 = mul i32 %x, %x
+  %z1 = mul i32 2, %x
+  %z2 = add i32 %z1, 30
+  %z3 = mul i32 3, %z2
+  %cmp = icmp slt i32 %z3, %y1
+  br i1 %cmp, label %1, label %2
+
+; <label>:1   ; preds = %0
+  %y2 = add i32 %y1, 1
+  br label %3
+
+; <label>:2   ; preds = %0
+  %y3 = add i32 %y1, 2
+  br label %3
+
+; <label>:3   ; preds = %2, %1
+  %z4 = phi i32 [%y2,%1], [%y3,%2]
+  %z5 = add i32 %z4, 10
+  ret i32 %z5
+}
+    \end{lstlisting}
+    \caption{Source}
+    \label{fig:sconstprop}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+define i32 @main(i32 %argc, i8** %argv) nounwind uwtable {
+  %x = add i32 10, 0
+  %y1 = mul i32 10, 10
+  %z1 = mul i32 2, 10
+  %z2 = add i32 20, 30
+  %z3 = mul i32 3, 50
+  %cmp = icmp slt i32 150, 100
+  br i1 false, label %1, label %2
+
+; <label>:1   ; preds = %0
+  %y2 = add i32 100, 1
+  br label %3
+
+; <label>:2   ; preds = %0
+  %y3 = add i32 100, 2
+  br label %3
+
+; <label>:3   ; preds = %2, %1
+  %z4 = phi i32 [ 101, %1 ], [ 102, %2 ]
+  %z5 = add i32 %z4, 10
+  ret i32 %z5
+}
+    \end{lstlisting}
+    \caption{Target}
+    \label{fig:tconstprop}
+  \end{subfigure}
+  \end{mdframed}
+  \caption{Constant propagation example}
+  \label{fig:constprop}
+\end{figure}
+
+As the example shows, the declaration instruction remains; this however, is an expected behavior, since it will be deleted at once by other passes, like dead code elimination. The witness-augmented pass also builds an invariant for every folded instruction, and it augments the effectiveness using also the information given by the external invariants. This will allow in theory to find more instructions to be propagated than using only LLVM's \texttt{ConstantFoldInstruction()}. Again, to find if an instruction has a constant value, the invariant is solved with Z3.
+
+The Witness is written as the formula described in Chapter~\ref{cha:witness_for_common_optimizations}. In this case, as in the transformation in Subsection~\ref{sub:variable_renaming}, the witness checker will prove if the witness is a step simulation. This suffices to prove the correctness of the transformation, since constant propagation is a structure preserving transformation.
+% , and it doesn't rearrange, add or remove instructions.
+
+\subsection{Dead Code Elimination and Control Flow Graph Compression}
+\label{sub:dce_and_cfgc}
+
+In Dead code elimination (DCE) the instructions that are not being used are systematically removed from the function. In this implementation, DCE and Control Flow Graph Compression  (CFGC) are treated as a unique transformation. DCE makes use of the method \texttt{isInstructionTriviallyDead} that automatically checks if the instruction doesn't have any use and if removing it doesn't have side effects. The example in Figure~\ref{fig:dce} shows DCE's behaviors for the output of the previous Constant Propagation example.
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+define i32 @main(i32 %argc, i8** %argv) nounwind uwtable {
+  %x = add i32 10, 0
+  %y1 = mul i32 10, 10
+  %z1 = mul i32 2, 10
+  %z2 = add i32 20, 30
+  %z3 = mul i32 3, 50
+  %cmp = icmp slt i32 150, 100
+  br i1 false, label %1, label %2
+
+; <label>:1   ; preds = %0
+  %y2 = add i32 100, 1
+  br label %3
+
+; <label>:2   ; preds = %0
+  %y3 = add i32 100, 2
+  br label %3
+
+; <label>:3   ; preds = %2, %1
+  %z4 = phi i32 [ 101, %1 ], [ 102, %2 ]
+  %z5 = add i32 %z4, 10
+  ret i32 %z5
+}
+    \end{lstlisting}
+    \caption{Source}
+    \label{fig:sdce}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+define i32 @main(i32 %argc, i8** %argv) nounwind uwtable {
+  br i1 false, label %1, label %2
+
+; <label>:1   ; preds = %0
+  br label %3
+
+; <label>:2   ; preds = %0
+  br label %3
+
+; <label>:3   ; preds = %2, %1
+  %z4 = phi i32 [ 101, %1 ], [ 102, %2 ]
+  %z5 = add i32 %z4, 10
+  ret i32 %z5
+}
+
+
+
+
+
+
+
+%*\hspace{0cm}
+    \end{lstlisting}
+    \caption{Target}
+    \label{fig:tdce}
+  \end{subfigure}
+  \end{mdframed}
+  \caption{Dead Code Elimination example}
+  \label{fig:dce}
+\end{figure}
+
+Dead Code Elimination \emph{per se} doesn't present stuttering, but, when combined with CFGC, stuttering behavior may be introduced, as the CFG can be potentially shrunk. This, however, can be avoided by constructing the transition relation differently than previously described, grouping them on the basic block level, so that the transition relation represent the transition between the basic block, that represents a ``macro instruction'' that is the result of all the instructions in the basic block. In this way, since DCE and CFGC do not reorder, eliminate or create blocks, it can be viewed as non stuttering over the block macro instructions.
+
+Dead code elimination can use injected invariants that assert that some branches of the CFG are never taken, therefore potentially reducing the number of uses of an instructions to zero, in which case the instruction can be eliminated from the function.
+
+\subsection{Loop Invariant Code Motion}
+\label{sub:licm}
+
+Loop invariant code motion (LICM) promotes instructions out of the loop. The LLVM implementation of LICM deals with hoisting and sinking in the same transformation pass, but the ACSL optimization deals (for now) only with hoisting. LICM is a reordering transformation that inspects every loop, starting from the most nested to the outer ones. Since it deals with loops, unlike the optimizations described so far - that are \texttt{FunctionPass} subclasses, LICM inherit from the \texttt{LoopPass} class. The LoopPass performs a static analysis over the loop and identify different elements of the loop (Figure~\ref{fig:loopcfg}). We'll briefly describe them to better understand the LICM.
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{tikzpicture}[%
+    ->,
+    shorten >=2pt,
+    >=stealth,
+    node distance=.1cm,
+    noname/.style={%
+      ellipse,
+      minimum width=5em,
+      minimum height=3em,
+      draw}
+    ]
+    \node[noname] (1) {\textbf{L0}};
+    \node[noname] (2) [node distance=1cm,below=of 1] {\textbf{L1}};
+    \node[noname] (4) [node distance=.75cm,below right=of 2] {\textbf{L2}};
+    \node[noname] (6) [node distance=1.1cm,below=of 2] {\textbf{L3}};
+    \path (1) edge node{} (2)
+          (2) edge node{} (6)
+          (2) edge [bend right=20pt] node{} (4)
+          (4) edge [bend right=20pt] node {} (2);
+    \node (7) [right=of 1] {\emph{preheader}};
+    \node (7) [text width=6em,right=of 2] {\emph{header\\exiting}};
+    \node (7) [right=of 4] {\emph{latch}};
+    \node (7) [right=of 6] {\emph{exit}};
+  \end{tikzpicture}
+  \end{mdframed}
+  \caption{CFG of a generic Loop}
+  \label{fig:loopcfg}
+\end{figure}
+
+The \emph{Header} is the entrance block of the loop, the first to be executed. Every other block inside the loop is marked as \emph{Latch}. The \emph{Exiting} block is a block in the loop whose at least one successor is outside the loop. There are also two other elements that do not directly belong to the loop, but are needed to define it. The \emph{Preheader} block is any predecessor of the header block outside of the loop, and the \emph{Exit} block is any successor of the exiting block outside the loop.
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+define i32 @main(i32 %argc, i8** %argv) nounwind uwtable {
+l0:
+  %a = add i32 3, 0
+  %b = add i32 2, 0
+  br label %l1
+
+l1:
+  %i0 = phi i32 [ 1, %l0 ], [ %i1, %l2 ]
+  %cmp = icmp sle i32 %i0, 100
+  br i1 %cmp, label %l2, label %l3
+
+l2:
+  %c = add i32 %a, %b
+  %i1 = add i32 %i0, %c
+  br label %l1
+
+l3:
+  ret i32 0
+}
+    \end{lstlisting}
+    \caption{Source}
+    \label{fig:slicm}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+define i32 @main(i32 %argc, i8** %argv) nounwind uwtable {
+l0:
+  %a = add i32 3, 0
+  %b = add i32 2, 0
+  %c = add i32 %a, %b
+  br label %l1
+
+l1:
+  %i0 = phi i32 [ 1, %l0 ], [ %i1, %l2 ]
+  %cmp = icmp sle i32 %i0, 100
+  br i1 %cmp, label %l2, label %l3
+
+l2:
+  %i1 = add i32 %i0, %c
+  br label %l1
+
+l3:
+  ret i32 0
+}
+    \end{lstlisting}
+    \caption{Target}
+    \label{fig:tlicm}
+  \end{subfigure}
+  \end{mdframed}
+  \caption[LOOP INVARIANT CODE MOTION EXAMPLE]{Loop invariant code motion example. The CFG of the loop is given in Figure~\ref{fig:loopcfg}}
+  \label{fig:licm}
+\end{figure}
+
+Hoisting is possible when an instruction in the latch or header blocks uses only instructions that are in the preheaders of the loop (or in their predecessor) and the loop is guaranteed to execute at least once. In the example in Figure~\ref{fig:licm}, the instruction \texttt{\%c = add i32 \%a, \%b} is moved from the latch block \texttt{l2} to the preheader block \texttt{l0}. In LICM the witness is built in the following way: if a statement is moved from a loop block $B$ to the preheader block $H$, $B$ and $\bar{H}$ is put into relation with $B$, where the bar means, as usual a target location. Morover, the variable values are preserved ($\forall x \in V, x=\bar{x}$) , except for the variables that have assignment in these blocks.
+
+The generated witness for this transformation may stutter, as LICM is a reordering transformation. In the example above, \texttt{l0} $\rightarrow$ \texttt{l1} $\rightarrow$ \texttt{l2} in the target stutters in \texttt{l0} in the source. This requires the witness checker to prove the correctness for the following formula:
+\[
+\begin{array}{l}
+  \forall u \in I_B, \exists s \in I_B, X(u,s) \\
+  \land \forall u,v \in S_B, s \in S_A, (X(u,s) \land R_B(U,V)) \implies( \\
+  \hspace{1cm}(\exists t \in S_A, X(v,t) \land R_A(S,t))\\
+  \hspace{1cm}\lor (\exists t \in S_A, X(u,t) \land R_A(S,t) \land X(u,s) \prec  X(u,t))\\
+  \hspace{1cm}\lor (X(v,s) \land X(u,s) \prec  X(v,s)\\
+  )
+\end{array}
+\]
+As before, the universal quantifier is eliminated and the formula is negated before being discharged to the SMT solver.
+
+The external annotations can be plugged to the \texttt{LoopInfo} class that takes track of all the invariants regarding a loop and is queried by the loop transformation during the analysis phase. Invariants can be explicitly injected in the LoopInfo with the method \texttt{makeLoopInvariant}.

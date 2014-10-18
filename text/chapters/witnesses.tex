@@ -1,0 +1,190 @@
+% !TEX root =  ../thesis.tex
+
+In this Chapter the witnesses for several standard optimizations are defined. These optimizations are chosen for their commonality and in order to illustrate features of the witness generation. We consider constant propagation, dead code elimination, control-flow graph compression and loop optimizations. Some transformation can be witnessed with a simple step simulation, however other transformations require the simulation to be stuttering, as the transformation can result in the target being shorter or longer than the source. As a side result of the examples, it is shown that the analysis required to check if a transformation can be triggered is more difficult than the witness generation procedure, showing that witness generation can be, in theory, an efficient transformation checker. Witness generation, essentially, makes explicit the implicit invariants gathered during the analysis. These examples confirm also the concept that, from a theoretical point of view, a witness can be generated for every kind of optimization, even though the complexity of the optimization will impact on the complexity of the witness. The examples are taken from \cite{zucknamjoshi}, and modified to highlight the details that this chapter wants to stress out.
+
+The actual implementation for some of these transformations will be exposed in Chapter~\ref{cha:hacking_llvm}. Therefore all the details concerning the implementation will be put aside, in order to focus on the key concepts both of witness generation and invariant propagation.
+
+\section{Constant Propagation}
+\label{sec:constant_propagation_th}
+
+In the \emph{Constant Propagation} pass, the analysis checks if any variable has a static assigned constant value. In the example of Figure~\ref{fig:constprop_th} all the values are constant-folded up.
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{subfigure}[t]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+L1: x = 1+2;
+L2: y = x+x;
+L3: y = y+1;
+L4: x = y;
+    \end{lstlisting}
+    \caption{Source}
+    \label{fig:sconstprop_th}
+  \end{subfigure}
+  \begin{subfigure}[t]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+L1: x = 3;
+L2: y = 6;
+L3: y = 7;
+L4: x = 7;
+    \end{lstlisting}
+    \caption{Target}
+    \label{fig:tconstprop_th}
+  \end{subfigure}
+  \end{mdframed}
+  \caption{Constant propagation example}
+  \label{fig:constprop_th}
+\end{figure}
+
+The witness generation for constant propagation basically draws from the invariants generated during the analysis. The invariant, called $constant(l)$, simply describes the set of variables that have a statically computed constant value at location $l$. For example, the invariant at \texttt{L3} is $x =3 \land y = 6$.
+
+The witness relation is expressed in a symbolic form. The general shape of the relation for constant propagation is the following: a target state $(m, t)$ is related to a source state $(l, s)$ if and only if:
+\begin{itemize}
+  \item labels are identical (i.e., $m = l$),
+  \item variables have identical values (i.e., for every variable $x, s(x) = t(x)$), and
+  \item variables in the source system have values given by their invariant (i.e., $constants(l)$ holds at $s$)
+\end{itemize}
+Where for every variable $x$ in the source, $\bar{x}$ indicates its corresponding version in the target. For example, in symbolic form, the relation includes the clause
+\[
+  @L3 \land @\bar{L3} \land (x = \bar{x}) \land (y = \bar{y}) \land (z = \bar{z}) \land x = 3 \land y = 6
+\]
+
+It's necessary that the invariants hold at the source location, because this establishes the correspondence between target and source. For instance, the transition from $L2$ to $L3$ is matched by the transition from $\bar{L2}$ to $\bar{L3}$ only because the value of $x$ is defined as constant in $constant(L2)$
+
+\section{Dead Code Elimination}
+\label{sec:dce_and_cfgc_th}
+
+Dead code elimination analyzes the code, building use-define chains for every assignment instruction, and marks all those instructions for which use set is empty. This means that the assigned value is not being used in any of the program computation and removing it doesn't change the semantics of the code. In this context, dead code elimination is split in two separate phases, the second being a restrictd instance of control flow graph compression. If the transition from location $m$ to location $n$ assigns a value to a variable $v$ that is dead (i.e., not live) at $n$, this assignment may be replaced with a skip statement. This is illustrated in Figure~\ref{fig:dce_th} which performs dead-code detection for the output of the constant propagation analysis. The result of the liveness analysis is a set, denoted $live(l)$, for each location $l$ of the source program.
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{subfigure}[t]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+L1: x = 3;
+L2: y = 6;
+L3: y = 7;
+L4: x = 7;
+    \end{lstlisting}
+    \caption{Source}
+    \label{fig:sdce_th}
+  \end{subfigure}
+  \begin{subfigure}[t]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+L1: x = skip;
+L2: y = skip;
+L3: y = 7;
+L4: x = 7;
+    \end{lstlisting}
+    \caption{Target}
+    \label{fig:tdce_th}
+  \end{subfigure}
+  \end{mdframed}
+  \caption{Dead code elimination example}
+  \label{fig:dce_th}
+\end{figure}
+
+Here is described a general procedure for generating a witness for DCE. A target state $(m, t)$ is related to a source state $(l, s)$ if and only if:
+\begin{itemize}
+  \item labels are identical (i.e., $m = l$), and
+  \item every variable that is live at $l$ has the same value as the corresponding variable at $m$. I.e., for every variable $x$ such that $x \in live(l): s(x) = t(x)$.
+\end{itemize}
+For example, in symbolic form, the relation includes the clause
+\[
+  @\bar{L4} \land @L4 \land (y = \bar{y})
+\]
+as only the variable $x$ is live at $L4$. For any correct dead code elimination transformation, the relation defined above is a strong simulation witness.
+
+Continuing the example from the result of dead code elimination, the control flow graph has unnecessary \emph{skip} statements. These may be removed using the rewrite rule $skip; S \rightarrow S$, for any statement $S$. This compresses the control flow graph. Other instances of compression may occur in the following situations:
+\begin{itemize}
+  \item a sequence such as \texttt{goto L1; L1:S} is replaced with \texttt{L1:S}, or
+\item the sequence \texttt{S1; if (C) skip else skip; S2} is replaced with \texttt{S1;S2}.
+\end{itemize}
+In all these cases the computation in the target is shorter than the one in the source,
+
+The general witness definition relates a target state $(m,t)$ to a source state $(l,s)$ if $s = t$ and either $l = m$ or $l$ lies on a linear chain of \emph{skip} statements from $m$ in the source graph.
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+L1: x = skip;
+L2: y = skip;
+L3: y = 7;
+L4: x = 7;
+%*\vspace{0cm}
+    \end{lstlisting}
+    \caption{Source}
+    \label{fig:scfgc_th}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+L3: y = 7;
+L4: x = 7;
+%*\vspace{0cm}
+    \end{lstlisting}
+    \caption{Target}
+    \label{fig:tcfgc_th}
+  \end{subfigure}
+  \end{mdframed}
+  \caption{Control-Flow-Graph compression example}
+  \label{fig:cfgc_th}
+\end{figure}
+
+For a correct control-flow graph compression, the defined relation is a stuttering simulation witness. Moreover, as a result of the closure property for stuttering simulation, it is possible to take the witnesses for constant propagation $W_1$, dead-code elimination $W_2$, and control-flow graph compression $W_3$ and compose them to form a single witness $W = W_1;W_2;W_3$for the transformation from the program in Figure~\ref{fig:sconstprop_th} to the program in Figure~\ref{fig:tcfgc_th}.
+
+\section{Reordering Transformations}
+\label{sec:reordering_transformations}
+
+A \emph{reordering transformation} is a program transformation that changes the order of execution of the code, without adding or deleting any statements. It preserves a dependence if it preserves the relative execution order of the source and target of that dependence, and thus preserves the semantical meaning of the program. Reordering transformations cover many loop optimizations, including fusion, distribution, interchange, tiling, and reordering of statements within a loop body.
+
+A generic loop can be described, as introduced in \cite{zuck2005translation}, by the statement \texttt{for $i \in \mathcal{I}$ by $\prec_{\mathcal{I}}$ do B(i) } where $i$ is the loop induction variable and $\mathcal{I}$ is the set of the values assumed by $i$ through the different iterations of the loop. The set $\mathcal{I}$ can typically be characterized by a set of linear inequalities. While in \cite{zuck2005translation} ``structure preserving'' and ``Reordering'' transformation passes are treated differently, here we follow \cite{zucknamjoshi} and let the witness relation to be defined so that it allows for uniform treatment of the two types of transformations.
+
+\section{Loop Invariant code motion}
+\label{sec:a_simple_reordering_transformation}
+
+\emph{Loop invariant code motion} (also referred to as ``hoisting'') moves some instructions from the inner to the outer body of a loop without affecting the semantics of the program. Usually a reaching definitions analysis is used to detect whether a statement or expression is loop invariant. For example, if all reaching definitions for the operands of some simple assignment are outside of the loop, the assignment can be moved out of the loop. Moreover, in order to move instructions outside the loop, LICM analysis must guarantee that there is at least one iteration for every different computation case of the program. See for example Figure~\ref{fig:licm_th} which is a simplified version of an example from \cite{steven1997advanced}. Since the loop is going to be executed at least once, the assignments to $a$ and $c$, which are not dependent on any statement in the loop body, can be moved outside of the loop.
+
+\begin{figure}[t]
+  \begin{mdframed}
+  \centering
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+L0: i = 1;
+L1: while(i<100){
+L2:   c = 3;
+L3:   i = i + 1;
+    }
+    \end{lstlisting}
+    \caption{Source}
+    \label{fig:slicm_th}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{lstlisting}
+L0: i = 1;
+L2: c = 3;
+L1: while(i<100){
+L3:   i = i + 1;
+    }
+    \end{lstlisting}
+    \caption{Target}
+    \label{fig:tlicm_th}
+  \end{subfigure}
+  \end{mdframed}
+  \caption{Loop Invariant Code Motion example}
+  \label{fig:licm_th}
+\end{figure}
+
+The transformation analyzer will detect the lack of dependencies of the statement in $L2$ on the other statements in the body, together with the fact that the loop is guaranteed to be executed at least once. The witness is generated in the following fashion. The simulation maps the first statements of the target program (In this case $L0$) and the first iteration of the target loop into the first iteration of the source loop. This mapping of course stutters, as there are more instructions in the target program segment than in the source program segment. Thus, the corresponding symbolic (stuttering simulation) will include the following clause: $L3 \land \bar{L3} \land i=\bar{i} \land c=\bar{c} \land c=3$. From the second iteration onwards, when $i>1$, the two loops are linked one by one in a stuttering simulation (since one target instruction in the target loop is mapped over two instructions in the source loop).
+
+There is also a more general Loop invariant code motion that combines ``hoisting'' (where the instructions are moved before the loop body, as seen above) and ``sinking'' (where the instructions are moved after the loop body). For sinking, it must be checked that the moved instruction is not used inside the loop and that the loop is executed at least once. Given that, the witness generation follows the one described for the hoisting loop invariant code motion.

@@ -1,0 +1,178 @@
+% UIC Thesis Template by
+% Michele Spagnuolo - http://michele.spagnuolo.me
+% Feb 2013
+
+\documentclass[letterpaper,11pt,oneside,final]{uicthesis}
+% \usepackage[T1,T2A]{fontenc}
+\usepackage[utf8]{inputenc}
+% \usepackage[italian]{babel}
+\usepackage{amsfonts, amsmath, amsthm, amssymb, epsfig, graphicx, float, listings, enumerate, mdframed}
+\usepackage{subcaption,leading}
+\usepackage[disable]{todonotes}
+\usepackage[longnamesfirst,square,sort&compress, comma, super]{natbib}
+\usepackage[xindy,style=index]{glossaries}
+\usepackage{bera}
+\usepackage{array}
+\usepackage{multirow}
+
+\floatstyle{plaintop}
+\restylefloat{table}
+
+% \renewcommand\labelitemi{--}
+
+\newtheoremstyle{mythstyle}% name
+   {\topsep}%pace above
+   {\topsep}%Space below
+   {\itshape}%Body font
+   {\parindent}%Indent amount (empty = no indent, \parindent = para indent)
+   {}%Thm head font
+   {}%Punctuation after thm head
+   {\newline}%\Space after thm head: " " = normal interword space; \newline = linebreak
+   {\thmname{\textbf{#1}}\thmnumber{ \textbf{#2}} \thmnote{\emph{#3}}}%Thm head spec (can be left empty, meaning `normal')
+
+
+\theoremstyle{mythstyle}
+\newtheorem{fdefinition}{Definition}
+\newtheorem{ftheorem}{Theorem}
+
+\usetikzlibrary{positioning,shapes.geometric}
+\tikzstyle{bordered} = [align=center,draw,outer sep=0,inner sep=1,minimum size=10]
+\tikzstyle{arrow} = [-stealth]
+\tikzstyle{gcircle} = [draw, fill=lightgray, circle, minimum size=10]
+
+
+\lstset{ %
+  basicstyle=\footnotesize\ttfamily,        % the size of the fonts that are used for the code
+  breakatwhitespace=false,         % sets if automatic breaks should only happen at whitespace
+  breaklines=true,                 % sets automatic line breaking
+  captionpos=b,                    % sets the caption-position to bottom
+  deletekeywords={...},            % if you want to delete keywords from the given language
+  escapeinside={\%*}{*)},          % if you want to add LaTeX within your code
+  extendedchars=true,              % lets you use non-ASCII characters; for 8-bits encodings only, does not work with UTF-8
+  % frame=single,                    % adds a frame around the code
+  language=C,                 % the language of the code
+  morekeywords={*,...},            % if you want to add more keywords to the set
+  % numbers=left,                    % where to put the line-numbers; possible values are (none, left, right)
+  % numbersep=1pt,                   % how far the line-numbers are from the code
+  numberstyle=\tiny, % the style that is used for the line-numbers
+  showspaces=false,                % show spaces everywhere adding particular underscores; it overrides 'showstringspaces'
+  showstringspaces=false,          % underline spaces within strings only
+  showtabs=false,                  % show tabs within strings adding particular underscores
+  stepnumber=1,                    % the step between two line-numbers. If it's 1, each line will be numbered
+  tabsize=2,                       % sets default tabsize to 2 spaces
+  title=\lstname                   % show the filename of files included with \lstinputlisting; also try caption instead of title
+}
+
+% Configuration
+	% Thesis title
+	\newcommand{\thesisTitle}{\LARGE An Annotation Framework for Low-Level Virtual Machine Compiler Infrastructure}
+	% Thesis author
+	\newcommand{\thesisAuthor}{GIACOMO TAGLIABUE}
+	% Author's previous degrees
+	\newcommand{\authorDegrees}{B.S., Politecnico di Milano, Milan, Italy, 2011}
+	% Current degree (Thesis's degree)
+	\newcommand{\thesisDegree}{Master of Science in Computer Science}
+
+\usepackage[unicode,
+			pdftex,
+			plainpages=false,
+			linktoc=all,
+			hyperindex,
+			breaklinks=true,
+			citecolor=green,
+			urlcolor=blue,
+			hidelinks
+		   ]{hyperref}
+\hypersetup{
+	pdftitle={\thesisTitle},
+	pdfauthor={\thesisAuthor}
+}
+
+% Style
+\input{style/style}
+
+% Acronyms (to appear in the List of Abbreviations)
+\makeglossaries
+\input{acronyms/acronyms}
+
+\begin{document}
+
+	\title{\huge{\thesisTitle}}
+	\author{\thesisAuthor}
+	\pdegrees{\authorDegrees}
+	\degree{\thesisDegree}
+	\maketitle
+
+	\listoftodos
+
+	% \copyrightpage
+
+	\dedication
+		\input{dedication/dedication}
+
+	\acknowledgements
+		\input{acknowledgements/acknowledgements}
+
+	\preface
+		\input{preface/preface}
+
+	\tableofcontents
+	\listoftables
+	\listoffigures
+	% Remember to run makeglossaries thesis
+		\glsaddall
+		\printglossary[title=LIST OF ABBREVIATIONS]
+
+	\summary
+		\input{summary/summary}
+
+	\chapter{Introduction}
+		\label{cha:introduction}
+		\input{chapters/intro}
+
+	% \chapter{Formal methods and static optimization: a new approach}
+	% 	\label{cha:formal_methods_and_static_optimization_a_new_approach}
+	% 	\input{chapters/formal}
+
+	% \chapter{Annotation language}
+	% 	\label{cha:annotation_language}
+	% 	\input{chapters/annotation}
+
+	\chapter{The Transformation Witness}
+		\label{cha:transformation_witness}
+		\input{chapters/witness}
+
+	\chapter{Witness for Common Optimizations}
+		\label{cha:witness_for_common_optimizations}
+		\input{chapters/witnesses}
+
+	\chapter{Design and Implementation}
+		\label{cha:hacking_llvm}
+		\input{chapters/llvm}
+
+% \chapter{Results}
+% 		\label{cha:results}
+% 		\input{chapters/results}
+
+\chapter{Results, Conclusions and Future Works}
+	\label{cha:conclusions}
+	\input{chapters/conclusions}
+
+	\clearpage
+	\phantomsection
+	\appendices
+		\appendix \label{app:a}
+		\input{appendices/appa}
+
+	\clearpage
+	\phantomsection
+	\bib
+	\bibliography{biblio}
+	\nocite{*}
+
+	\newpage
+	\phantomsection
+
+	\input{vita/vita}
+
+\end{document}

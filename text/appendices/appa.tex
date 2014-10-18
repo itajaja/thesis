@@ -1,0 +1,22 @@
+% !TEX root =  ../thesis.tex
+\chapter{Brief program guide, instructions and examples}
+
+These are the steps to correctly compile and use the framework.
+
+\begin{enumerate}
+  \item Download the repository from \url{https://bitbucket.org/itajaja/llvm-csfv}
+  \item Compile and install Z3 following the instruction provided in the source code. In this work the version 4.3.1 of Z3 was used
+  \item Compile LLVM running \texttt{make} in the project root folder
+  \item (Optional) Install the LLVM executable with \texttt{make install}
+  \item The Witness-augmented optimizations are in the folder \texttt{lib/Transforms/Acsl/witness/}. They are compiled separately and dinamically linked to the LLVM optimizer
+  \item run \texttt{make} in the witness folder
+  \item To run an ACSL pass over an IR file, run the following command
+  \begin{center}
+\texttt{\footnotesize <PROJECT\_FOLDER>/Debug+Asserts/bin/opt -load /usr/lib/libz3.so -load <PROJECT\_FOLDER>/Debug+Asserts/lib/Acsl.so -acslcp  <InputFile.s>}  \end{center}
+where \emph{acslcp} can be substituted by any other optimization name.\\
+To run an ACSL pass over a C program, run the following command
+  \begin{center}
+\texttt{\footnotesize <PROJECT\_FOLDER>/Debug+Asserts/bin/clang -load /usr/lib/libz3.so -load <PROJECT\_FOLDER>/Debug+Asserts/lib/Acsl.so -mem2reg -acslcp  <InputFile.c>}  \end{center}
+\item To show debug strings, add the option \texttt{-debug-only='acsl'}
+\item To add any other ACSL pass, follow the structure of the existing ones, the run \texttt{make} inside the witness folder
+\end{enumerate}

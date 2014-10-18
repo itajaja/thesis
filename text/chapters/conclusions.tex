@@ -1,0 +1,99 @@
+% !TEX root =  ../thesis.tex
+
+\section{Results}
+\label{sec:results}
+
+Based on the LLVM optimization framework, we were able to develop a program that has all the functionalities required in order to have a working annotation framework and a witness transformation system. The program was tested with several IR functions. The programs were written in C, converted to Intermediate Representation with CLANG, and a \texttt{mem2reg} pass was run to remove instruction types not processable by the ACSL transformations. The test cases have been uploaded to the repository.
+The translator was able to fully translate from Intermediate Representation to a transition relation between either single instructions or basic blocks of instructions. The witness generator for Constant Propagation, Dead Code Elimination and Control Flow Graph Compression proved to be correct both with stuttering and step simulation. For testing purposes the transformations were slightly ``modified'' to be buggy; indeed, a correctness proof could not be generated. The generation and verification of the witness didn't suffer a considerable overhead of time w.r.t. their corresponding optimizations
+
+\subsection{Times}
+\label{sub:times}
+
+To calculate the overhead incurred by Z3 for generate and verify the witness in general run, times were measured for different runs. The test cases were run in sequence and the tool \texttt{time-passes} of the LLVM optimizer was run together with different instances of the passes. For each test case and transformation, two runs were performed, one with the ACSL version of the pass, and one with the regular LLVM version. The run times were compared to calculate the overhead; Tables~\ref{tab:res1} and~\ref{tab:res2} show the results.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{|c|c|c|c|c|c|c|}
+\hline
+\multirow{3}{*}{} & \multicolumn{6}{c|}{Pass execution timing report (ms)} \tabularnewline
+\cline{2-7}
+ & \multicolumn{3}{c|}{Constant Propagation} & \multicolumn{3}{c|}{DCE + CFGC}\tabularnewline
+\cline{2-7}
+ & LLVM & ACSL & Diff & LLVM & ACSL & Diff\tabularnewline
+\hline
+\hline
+Test 1 (11 LOC) & 1.1 & 14.1 & 13.0 & 0.5 & 9.2 & 7.7 \tabularnewline
+\hline
+Test 2 (28 LOC) & 1.2 & 49.7 & 48.5 & 0.4 & 18.3 & 17.9 \tabularnewline
+\hline
+Test 3 (28 LOC) & 1.0 & 54.8 & 53.8 & 1.2 & 40.1 & 38.9 \tabularnewline
+\hline
+Test 4 (10 LOC) & 1.1 & 16.0 & 14.9 & 0.4 & 8.8 & 8.4 \tabularnewline
+\hline
+Test 5 (96 LOC) & 1.5 & 445.3 & 443.8 & 1.0 & 106.9 & 105.9 \tabularnewline
+\hline
+Test 6 (37 LOC) & 1.1 & 116.5 & 115.3 & 0.8 & 88.3 & 86.5 \tabularnewline
+\hline
+Test 7 (24 LOC) & 1.1 & 27.2 & 26.1 & 0.4 & 25.5 & 25.1 \tabularnewline
+\hline
+Average & 1.01 & 103.37 & 101.36 & 0.67 & 42.38 & 41.71 \tabularnewline
+\hline
+\end{tabular}
+
+\caption{RESULT TIMES FOR CONSTANT PROPAGATION, DCE AND CFGC}
+\label{tab:res1}
+\end{table}
+
+\begin{table}[t]
+\centering
+\begin{tabular}{|c|c|c|c|c|c|c|}
+\hline
+\multirow{3}{*}{} & \multicolumn{3}{c|}{Pass execution timing report (ms)} \tabularnewline
+\cline{2-4}
+ & \multicolumn{3}{c|}{Loop Invariant Code Motion} \tabularnewline
+\cline{2-4}
+ & LLVM & ACSL & Diff\tabularnewline
+\hline
+\hline
+Test 1 (24 LOC) & 0.1 & 49.6 & 49.5 \tabularnewline
+\hline
+Test 2 (130 LOC) & 0.5 & 340.5 & 340.5 \tabularnewline
+\hline
+Average & 0.3 & 200.06 & 200.03 \tabularnewline
+\hline
+\end{tabular}
+
+\caption{RESULT TIMES FOR LOOP INVARIANT CODE MOTION}
+\label{tab:res2}
+\end{table}
+
+Although the results show a considerable overhead on small samples, it appears to not grow linearly with the size of the code. Furthermore, the code can be analyzed to improve performance and tested for memory leakage and other implementation details, that are outside of the proof of concept that these results wanted to demonstrate.
+
+\subsection{Issues}
+\label{sub:issues}
+
+The witness generator for Loop Invariant code motion showed some false positives, proving correct some incorrect transformations. This is due to the fact that LLVM loop analysis is deep and articulated, and an instruction can be moved for different reasons other than the ones that the witness is able to describe. The solution to the problem can be either to modify the witness generator to include all the case produced by LICM analysis, or to reduce the scope of the analysis and perform further optimization in a separate transformation pass.
+
+The LLVM Annotation Framework presented here is still on developement phase and it will then be part of a bigger framework that handles how the external invariants are imported and fully exploited. This is a related work that goes beyond the scope of this work.
+
+\section{Conclusions and Related Works}
+\label{sub:related_works}
+Showing the correctness of program transformations, in particular compiler optimizations, is a long-standing problem. There are numerous works that target specific compilers and languages. In  \cite{leroy2009formal}, Leroy gives a nice technical and historical view of approaches to this question. A first approach is that of verification: to formally prove each transformation correct, over all legal input programs. This is the approach taken, for example, by the CompCert project \cite{leroy2006formal}. However, formally verifying a full-fledged optimizing compiler, as one would verify any other large program, is practically infeasible, due mainly to the size of the code of the passes, evolution over time, and, possibly, proprietary considerations.
+
+The \emph{Translation Validation} approach offers an alternative to the verification of translators in general and of compilers in particular. Using the translation validation approach, rather than verify the compiler itself one constructs a validating tool which, after every run of the compiler, formally confirms that the target code produced is a correct translation of the source program. The work in \cite{pnueli1998code} developed a tool for translation validation that succeeded in automatically verifying translations involving approximately 10,000 lines of source code in about 10 minutes. Its success critically depended on some simplifying assumptions that restrict the source and target to programs with a single external loop, and assumed a very limited set of optimizations. Subsequent approaches like the one in \cite{Rinard99crediblecompilation} considered translation validation for less restrictive languages, allowing, for example, nested loops. They also considered a more extensive set of optimizations. However, the methods proposed there were restricted to structure preserving optimizations. They could not directly deal with more aggressive optimizations such as loop distribution and loop tiling that are often used in more advanced optimizing compilers, nor could they handle simpler optimizations which relied on stuttering for correctness.
+
+The approach presented offers similarity to translation validation, but it differs as it requires that the optimization is known and can be analyzed and modified. This gives the opportunity to add a witness generator which produces a different witness for every transformation that undergoes a generic program at compile time. This makes the witness approach, in principle, applicable to any optimization: stuttering simulation witnesses are proved to be complete and sound regardless of the transformation considered.
+
+In practice, the real limitation is given by the possible high complexity that a witness can reach. The logics needed to express witness may not have decision procedures, so that fully automated checking is not possible. However, using SMT solvers, particullary Z3 in this context, it was possible to evaluate the witnesses expressed in this work. The complexity could also arise from the externally provided invariant, of which nothing can be known a priori. This can hamper the logics used by Z3 and result in situations were it couldn't be able to produce a result.
+
+A solution for the problem of propagating invariants across transformations is also provided. This will be useful in the case where the annotations are given to the compiler so it could make use of them to perform further and better performing optimizations without having to improve the scope of the internal analysis. This problem had not been addressed in the general form discussed here.
+
+Regarding formal verification works over the LLVM framework, LAV \cite{vujovsevic2012development} that statically checks program assertions and errors, and KLEE \cite{cadar2008klee}, capable of automatically generating tests that achieve high coverage on a diverse set of complex and environmentally-intensive programs.
+
+\section{Future Works}
+\label{sec:future_works}
+The framework described in this work is at an early stage of implementation, and needs to be improved in several aspects and tested thoroughly. Even if the design and the basic structure has been implemented, in order for the project to be used in significant real case projects, some extensions are necessary.
+
+The first important feature that needs to be expanded is the Intermediate Representation support. Currently the framework doesn't support store and load instructions to the memory and function calls. Including them in the witness generation and in the translator will require some non trivial modifications, especially for memory instructions. In fact, including them, means that the IR will not be a ``pruned'' SSA, and the generated invariants will need to be checked more carefully.
+
+The framework can also be improved in other directions, for example by expanding the supported types with floats or charachters. Introducing pointer and arrays, though necessary for including real case scenarios, will need some effort, in order to correctly deal with aliasing issues. Certainly, several optimizations can be added to the framework, beginning from Conditional Contant Propagation and some Loop Reordering transformations, such as Loop Reversal, Interchange or Skewing Transformations.
