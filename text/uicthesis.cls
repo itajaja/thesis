@@ -165,46 +165,57 @@
 
 \def\endtitlepage{\newpage}
 
+\newcommand{\thesisHeader}{POLITECNICO DI MILANO\\Corso di Laurea Magistrale in Ingegneria Informatica\\Dipartimento di Elettronica, Informazione e Bioingegneria}
+\newcommand{\thesisHeaderImageFile}{images/logo_polimi.png}
+
+
 \def\maketitle{%
    \begin{titlepage}
       %\centering
       \thispagestyle{empty}
       \c@page=2
+      \begin{center}\begin{singlespace}
+        \includegraphics[width=40mm]{images/logo_polimi.png}\\[0.4cm] % Include a department/university logo - this will require the graphicx package
+        POLITECNICO DI MILANO\\Corso di Laurea Magistrale in Ingegneria Informatica\\Dipartimento di Elettronica, Informazione e Bioingegneria
+      \end{singlespace}\end{center}
       \vbox to 0pt{%
          \begin{center}
             \large\transparentbold\@title
          \end{center}\vss}
       \vfill
-      \begin{center}
-      \begin{singlespace}
-         BY
-         \vskip\baselineskip
-         \begin{tabular}{c}
-            \@upauthor\\\@pdegrees
-         \end{tabular}
+%      \begin{center}
+      \begin{singlespace}\begin{flushright}
+         Thesis of:\\ \textbf{\@upauthor,\\matricola 780312}
+         \end{flushright}
+%         \vskip
+%         \baselineskip
+%         \begin{tabular}{c}
+%         \end{tabular}
          \vfill
-         \vbox to 0pt{\vss
-            \begin{center}
-               THESIS
-               \vskip \baselineskip
-               Submitted as partial fulfillment of the requirements\\
-               for the degree of \@degree\\
-               in the Graduate College of the\\
-               University of Illinois at Chicago, \@date
-               \vskip 3\baselineskip
-               Chicago, Illinois
-            \end{center}}
+%         \vbox to 0pt{\vss
+%            \begin{center}
+%               THESIS
+%               \vskip \baselineskip
+%               Submitted as partial fulfillment of the requirements\\
+%               for the degree of \@degree\\
+%               in the Graduate College of the\\
+%               University of Illinois at Chicago, \@date
+%               \vskip 3\baselineskip
+%               Chicago, Illinois
+%            \end{center}}
       \end{singlespace}
-      \end{center}
+%      \end{center}
       \begin{singlespace}
       \begin{tabular}{lr}
-      Defense Committee: & \\
-      Lenore Zuck, Chair and advisor & \\
-      V.N. Venkatakrishnan, UIC & \\
-      Pierluca Lanzi, Politecnico di Milano & \\
-      Kedar Namjoshi, Bell-Labs, Alcatel-Lucent &
+      Advisor (Politecnico di Milano): & \\
+      \textbf{Pierluca Lanzi} & \\
+      Advisor (University of Illinois at Chicago): & \\
+      \textbf{Lenore Zuck} & \\
       \end{tabular}
       \end{singlespace}
+      \begin{singlespace}\begin{center}
+        A.A 2014/2015
+      \end{center}\end{singlespace}
    \end{titlepage}}
 %    \end{macrocode}
 %
