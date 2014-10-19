@@ -6,6 +6,8 @@
 *.fls
 *.out
 *.toc
+*.pdf
+*.sublime-*
 
 ## Intermediate documents:
 *.dvi
