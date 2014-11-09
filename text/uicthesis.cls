@@ -345,6 +345,11 @@
    \typeout{SUMMARY.}
    \def\section@mark{SUMMARY}
    \@makeprelimhead}
+\def\italianSummary{
+   \clearpage
+   \typeout{AMPIO ESTRATTO.}
+   \def\section@mark{AMPIO ESTRATTO}
+   \@makeprelimhead}
 %    \end{macrocode}
 %
 % \subsection{List of Abbreviations}
